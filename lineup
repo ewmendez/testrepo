@@ -1,0 +1,181 @@
+#!/usr/bin/python
+from __future__ import division
+import pandas as pd
+import numpy as np
+from ortools.linear_solver import pywraplp
+
+class Builder(object):
+
+	def __init__(self, players, contest='dk'):
+		self.players = players
+		self.contest = contest
+
+		if contest == 'dk':
+			self.salary_cap = 50000
+			self.team_size = 10
+			self.position_counts = {
+				'1':2,
+				'2':1,
+				'3':1,
+				'4':1,
+				'5':1,
+				'6':1,
+				'7':3
+			}
+		elif contest == 'fd':
+			self.salary_cap = 35000
+			self.team_size = 9
+			self.position_counts = {
+				'1':1,
+				'2':1,
+				'3':1,
+				'4':1,
+				'5':1,
+				'6':1,
+				'7':3
+			}			
+		self.exclude_list = []
+		self.lock_list = []
+
+	def add_exclude(self, x):
+		if type(x) is not list: x = [x]
+		self.exclude_list += x
+
+	def rm_exclude(self, x):
+		if type(x) is not list: x = [x]
+		self.exclude_list = [i for i in self.exclude_list if i not in x]
+
+	def add_lock(self, x):
+		if type(x) is not list: x = [x]
+		self.lock_list += x
+
+	def rm_lock(self, x):
+		if type(x) is not list: x = [x]
+		self.lock_list = [i for i in self.lock_list if i not in x]
+
+	def generate_lineups(self, n_lineups, max_exposure):
+		df = self.players.loc[self.players['%s_pos'%self.contest] != '0', :].reset_index(drop=True)
+		df['p_count'] = 0
+
+		results = []
+		max_score = 99999
+		for i in range(n_lineups):
+			solver = pywraplp.Solver('%i'%i, pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
+
+			variables = []
+			objective = solver.Objective()
+			objective.SetMaximization()
+			salary_cap = solver.Constraint(0, self.salary_cap)
+			score_cap = solver.Constraint(0, max_score)
+			player_count = solver.Constraint(self.team_size, self.team_size)
+
+			for p in range(df.shape[0]):
+				player = df.loc[p, 'name']
+				score = df.loc[p, 'score']
+				salary = df.loc[p, '%s_salary' % self.contest]
+				p_count = df.loc[p, 'p_count']
+
+				if p_count >= max_exposure:
+					self.add_exclude(player)
+
+				if player in self.lock_list:
+					variables.append(solver.IntVar(1, 1, player))
+				elif player in self.exclude_list:
+					variables.append(solver.IntVar(0, 0, player))
+				else:
+					variables.append(solver.IntVar(0, 1, player))
+
+				objective.SetCoefficient(variables[p], score)
+				score_cap.SetCoefficient(variables[p], score)
+				salary_cap.SetCoefficient(variables[p], salary)
+				player_count.SetCoefficient(variables[p], 1)
+
+			for p in self.position_counts.keys():
+				position_count = solver.Constraint(self.position_counts[p], self.position_counts[p])
+				for j in range(df.shape[0]):
+					if df.loc[j,'%s_pos' % self.contest].find(p) != -1:
+						position_count.SetCoefficient(variables[j], 1)
+
+			solver.Solve()
+			lineup = []
+			for v in variables:
+				if v.solution_value() == 1:
+					lineup.append(v)
+			lineup = map(str, lineup)
+			tmp = df[df['name'].isin(lineup)]
+			tmp['lineup_num'] = i
+			df.loc[df['name'].isin(lineup), 'p_count'] += 1
+			max_score = tmp['score'].sum() - 1e-4
+
+			tmp = (tmp[['name', 'team', '%s_pos'%self.contest, '%s_salary'%self.contest, 'score']]
+					.sort_values('%s_pos'%self.contest)
+					.set_index('name'))
+			results.append(tmp)
+
+		return results
+
+	def generate_stacks(self, n_lineups, max_exposure, team, min_stack, max_stack):
+		df = self.players.loc[self.players['%s_pos'%self.contest] != '0', :].reset_index(drop=True)
+		df['p_count'] = 0
+		df['stack'] = 0
+		df.loc[(df['team'] == team) & (df['%s_pos'%self.contest] != '1'), 'stack'] = 1
+
+		results = []
+		max_score = 99999
+		for i in range(n_lineups):
+			solver = pywraplp.Solver('%i'%i, pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
+
+			variables = []
+			objective = solver.Objective()
+			objective.SetMaximization()
+			salary_cap = solver.Constraint(0, self.salary_cap)
+			score_cap = solver.Constraint(0, max_score)
+			player_count = solver.Constraint(self.team_size, self.team_size)
+			stack_count = solver.Constraint(min_stack, max_stack)
+
+			for p in range(df.shape[0]):
+				player = df.loc[p, 'name']
+				score = df.loc[p, 'score']
+				salary = df.loc[p, '%s_salary' % self.contest]
+				p_count = df.loc[p, 'p_count']
+				stack = df.loc[p, 'stack']
+
+				if p_count >= max_exposure:
+					self.add_exclude(player)
+
+				if player in self.lock_list:
+					variables.append(solver.IntVar(1, 1, player))
+				elif player in self.exclude_list:
+					variables.append(solver.IntVar(0, 0, player))
+				else:
+					variables.append(solver.IntVar(0, 1, player))
+
+				objective.SetCoefficient(variables[p], score)
+				score_cap.SetCoefficient(variables[p], score)
+				salary_cap.SetCoefficient(variables[p], salary)
+				player_count.SetCoefficient(variables[p], 1)
+				stack_count.SetCoefficient(variables[p], stack)
+
+			for p in self.position_counts.keys():
+				position_count = solver.Constraint(self.position_counts[p], self.position_counts[p])
+				for j in range(df.shape[0]):
+					if df.loc[j,'%s_pos' % self.contest].find(p) != -1:
+						position_count.SetCoefficient(variables[j], 1)
+
+			solver.Solve()
+			lineup = []
+			for v in variables:
+				if v.solution_value() == 1:
+					lineup.append(v)
+			lineup = map(str, lineup)
+			tmp = df[df['name'].isin(lineup)]
+			tmp['lineup_num'] = i
+			df.loc[df['name'].isin(lineup), 'p_count'] += 1
+			max_score = tmp['score'].sum() - 1e-4
+
+			tmp = (tmp[['name', 'team', '%s_pos'%self.contest, '%s_salary'%self.contest, 'score']]
+					.sort_values('%s_pos'%self.contest)
+					.set_index('name'))
+			results.append(tmp)
+
+		return results
