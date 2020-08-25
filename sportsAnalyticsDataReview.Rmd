@@ -1,0 +1,43 @@
+---
+title: "sportsMetric"
+author: "Teddy Mendez"
+date: "7/23/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+
+pbp_2019 <- read_csv("https://raw.githubusercontent.com/ryurko/nflscrapR-data/master/play_by_play_data/regular_season/reg_pbp_2019.csv", )
+```
+
+```{r}
+pbp_2019 %>%
+  group_by(posteam, game_id) %>%
+  summarise(numberNoHuddles=sum(no_huddle)) -> huddlesPerGame
+
+pbp_2019 %>%
+  group_by()
+```
+
+```{r}
+pbp_2019 %>%
+  filter(game_seconds_remaining==0) %>%
+  mutate(outcome=case_when(
+    total_away_score>total_home_score ~ away_team,
+    total_away_score<total_home_score ~ home_team,
+    TRUE ~ 'tie'
+  )) %>%
+  select(game_id, home_team, away_team, outcome) %>%
+  left_join(huddlesPerGame, on='game_id') %>%
+  filter(!is.na(posteam)) %>%
+  mutate(case_when(
+    outcome==home_team
+  ))
+  head()
+
+  filter()
+  group_by(game_id)
+```
